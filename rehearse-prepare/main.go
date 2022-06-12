@@ -24,7 +24,7 @@ func main() {
 	flags := flags{}
 	flag.StringVar(&flags.inputDir, "in", "", "input directory")
 	flag.StringVar(&flags.outputDir, "out", "", "output directory")
-	flag.Float64Var(&flags.gain, "gain", 0.8, "gain for background tracks")
+	flag.Float64Var(&flags.gain, "gain", 0.5, "gain for background tracks")
 	flag.Float64Var(&flags.pan, "pan", 1, "pan for rehearsal track")
 
 	flag.Parse()
@@ -69,7 +69,7 @@ func run(flags flags) error {
 	_ = os.MkdirAll(filepath.Join(flags.outputDir, "trackplay"), 0644)
 
 	// trackplay
-	for _, track := range tracks {
+	for _, track := range tracks[:0] {
 		dest := filepath.Join(flags.outputDir, "trackplay", filepath.Base(track))
 		dest = removeExt(dest) + ".mp3"
 
@@ -125,7 +125,7 @@ func run(flags flags) error {
 				right += fmt.Sprintf("%.2f*c%d+%.2f*c%d", gain*pan, 2*k, gain*pan, 2*k+1)
 			}
 		}
-		amerge += "|c0<" + left + "|c1<" + right
+		amerge += "|c0=" + left + "|c1=" + right
 		args = append(args, "-filter_complex", amerge)
 
 		dest := filepath.Join(flags.outputDir, "rehearsal", filepath.Base(track))
