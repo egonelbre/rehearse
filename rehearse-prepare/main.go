@@ -69,7 +69,7 @@ func run(flags flags) error {
 	_ = os.MkdirAll(filepath.Join(flags.outputDir, "trackplay"), 0644)
 
 	// trackplay
-	for _, track := range tracks[:0] {
+	for _, track := range tracks {
 		dest := filepath.Join(flags.outputDir, "trackplay", filepath.Base(track))
 		dest = removeExt(dest) + ".mp3"
 
