@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"math"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -27,7 +28,7 @@ func main() {
 	flags := flags{}
 	flag.StringVar(&flags.inputDir, "in", "", "input directory")
 	flag.StringVar(&flags.outputDir, "out", "", "output directory")
-	flag.Float64Var(&flags.gain, "gain", 0.3, "gain for background tracks")
+	flag.Float64Var(&flags.gain, "gain", 1, "gain adjustment for background tracks")
 	flag.Float64Var(&flags.pan, "pan", 1, "pan for rehearsal track")
 	flag.BoolVar(&flags.skipTrackplay, "skip-trackplay", false, "disable trackplay generation")
 	flag.BoolVar(&flags.skipRehearse, "skip-rehearse", false, "disable rehearsal track generation")
@@ -113,11 +114,12 @@ func run(flags flags) error {
 			right := ""
 			for k := range tracks {
 				pan := 1 - flags.pan
-				gain := flags.gain
+				gain := flags.gain / math.Log2(float64(len(tracks)))
 				if k == target {
 					pan = 1 - pan
 					gain = 1
 				}
+				gain *= 0.5
 
 				if pan < 1 {
 					if left != "" {
