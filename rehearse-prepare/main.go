@@ -52,8 +52,9 @@ func main() {
 }
 
 var audioExt = map[string]bool{
-	".mp3": true,
-	".wav": true,
+	".aiff": true,
+	".mp3":  true,
+	".wav":  true,
 }
 
 func run(flags flags) error {
@@ -73,7 +74,7 @@ func run(flags flags) error {
 	}
 
 	if !flags.skipTrackplay {
-		_ = os.MkdirAll(filepath.Join(flags.outputDir, "trackplay"), 0644)
+		_ = os.MkdirAll(filepath.Join(flags.outputDir, "trackplay"), 0755)
 		// trackplay
 		for _, track := range tracks {
 			dest := filepath.Join(flags.outputDir, "trackplay", filepath.Base(track))
@@ -88,14 +89,14 @@ func run(flags flags) error {
 		}
 		data, _ := json.MarshalIndent(createTrackplayIndex(tracks), "", "\t")
 		indexPath := filepath.Join(flags.outputDir, "trackplay", "index.json")
-		if err = os.WriteFile(indexPath, data, 0644); err != nil {
+		if err = os.WriteFile(indexPath, data, 0755); err != nil {
 			return fmt.Errorf("failed to write index: %w", err)
 		}
 	}
 
 	if !flags.skipRehearse {
 		// individual rehearsal tracks
-		_ = os.MkdirAll(filepath.Join(flags.outputDir, "rehearsal"), 0644)
+		_ = os.MkdirAll(filepath.Join(flags.outputDir, "rehearsal"), 0755)
 		for target, track := range tracks {
 			args := []string{"-y"}
 
