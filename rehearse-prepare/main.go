@@ -77,7 +77,7 @@ func run(flags flags) error {
 		_ = os.MkdirAll(filepath.Join(flags.outputDir, "trackplay"), 0755)
 		// trackplay
 		for _, track := range tracks {
-			dest := filepath.Join(flags.outputDir, "trackplay", filepath.Base(track))
+			dest := filepath.Join(flags.outputDir, "trackplay", strings.TrimSpace(filepath.Base(track)))
 			dest = removeExt(dest) + ".mp3"
 
 			cmd := exec.Command("ffmpeg", "-i", track, "-ac", "1", dest)
@@ -138,7 +138,7 @@ func run(flags flags) error {
 			amerge += "|c0=" + left + "|c1=" + right
 			args = append(args, "-filter_complex", amerge)
 
-			dest := filepath.Join(flags.outputDir, "rehearsal", filepath.Base(track))
+			dest := filepath.Join(flags.outputDir, "rehearsal", strings.TrimSpace(filepath.Base(track)))
 			dest = removeExt(dest) + ".mp3"
 			args = append(args, dest)
 
@@ -177,7 +177,7 @@ func createTrackplayIndex(tracks []string) trackplayIndex {
 
 	add := func(path string) {
 		index.Tracks = append(index.Tracks, trackplayTrack{
-			Name:      removeExt(filepath.Base(path)),
+			Name:      removeExt(strings.TrimSpace(filepath.Base(path))),
 			StereoPan: -0.8,
 			Gain:      0.5,
 		})
