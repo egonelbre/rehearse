@@ -8,10 +8,9 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
-
-	"golang.org/x/exp/slices"
 )
 
 type flags struct {
@@ -65,7 +64,7 @@ func run(flags flags) error {
 
 	tracks := []string{}
 	for _, file := range files {
-		if file.IsDir() {
+		if file.IsDir() || strings.HasPrefix(file.Name(), ".") {
 			continue
 		}
 		if audioExt[filepath.Ext(file.Name())] {
@@ -95,8 +94,12 @@ func run(flags flags) error {
 	}
 
 	if !flags.skipRehearse {
+		outdir := flags.outputDir
 		// individual rehearsal tracks
-		_ = os.MkdirAll(filepath.Join(flags.outputDir, "rehearsal"), 0755)
+		if !flags.skipTrackplay {
+			outdir = filepath.Join(outdir, "rehearsal")
+		}
+		_ = os.MkdirAll(outdir, 0755)
 		for target, track := range tracks {
 			args := []string{"-y"}
 
@@ -138,7 +141,7 @@ func run(flags flags) error {
 			amerge += "|c0=" + left + "|c1=" + right
 			args = append(args, "-filter_complex", amerge)
 
-			dest := filepath.Join(flags.outputDir, "rehearsal", strings.TrimSpace(filepath.Base(track)))
+			dest := filepath.Join(outdir, strings.TrimSpace(filepath.Base(track)))
 			dest = removeExt(dest) + ".mp3"
 			args = append(args, dest)
 
