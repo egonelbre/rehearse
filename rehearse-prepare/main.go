@@ -19,8 +19,8 @@ type flags struct {
 	gain      float64
 	pan       float64
 
-	skipTrackplay bool
-	skipRehearse  bool
+	trackplay    bool
+	skipRehearse bool
 }
 
 func main() {
@@ -29,7 +29,7 @@ func main() {
 	flag.StringVar(&flags.outputDir, "out", "", "output directory")
 	flag.Float64Var(&flags.gain, "gain", 1, "gain adjustment for background tracks")
 	flag.Float64Var(&flags.pan, "pan", 1, "pan for rehearsal track")
-	flag.BoolVar(&flags.skipTrackplay, "skip-trackplay", false, "disable trackplay generation")
+	flag.BoolVar(&flags.trackplay, "trackplay", false, "disable trackplay generation")
 	flag.BoolVar(&flags.skipRehearse, "skip-rehearse", false, "disable rehearsal track generation")
 
 	flag.Parse()
@@ -72,7 +72,7 @@ func run(flags flags) error {
 		}
 	}
 
-	if !flags.skipTrackplay {
+	if flags.trackplay {
 		_ = os.MkdirAll(filepath.Join(flags.outputDir, "trackplay"), 0755)
 		// trackplay
 		for _, track := range tracks {
@@ -96,7 +96,7 @@ func run(flags flags) error {
 	if !flags.skipRehearse {
 		outdir := flags.outputDir
 		// individual rehearsal tracks
-		if !flags.skipTrackplay {
+		if flags.trackplay {
 			outdir = filepath.Join(outdir, "rehearsal")
 		}
 		_ = os.MkdirAll(outdir, 0755)
