@@ -1,14 +1,13 @@
 package main
 
 import (
-	"encoding/json"
 	"flag"
 	"fmt"
 	"math"
 	"os"
 	"os/exec"
 	"path/filepath"
-	"slices"
+	"regexp"
 	"strings"
 	"sync"
 )
@@ -19,8 +18,7 @@ type flags struct {
 	gain      float64
 	pan       float64
 
-	trackplay    bool
-	skipRehearse bool
+	metronomeGain float64
 }
 
 func main() {
@@ -29,8 +27,7 @@ func main() {
 	flag.StringVar(&flags.outputDir, "out", "", "output directory")
 	flag.Float64Var(&flags.gain, "gain", 1, "gain adjustment for background tracks")
 	flag.Float64Var(&flags.pan, "pan", 1, "pan for rehearsal track")
-	flag.BoolVar(&flags.trackplay, "trackplay", false, "disable trackplay generation")
-	flag.BoolVar(&flags.skipRehearse, "skip-rehearse", false, "disable rehearsal track generation")
+	flag.Float64Var(&flags.metronomeGain, "metronome", 0.5, "metronome gain")
 
 	flag.Parse()
 
@@ -56,162 +53,193 @@ var audioExt = map[string]bool{
 	".wav":  true,
 }
 
+var rxMetronome = regexp.MustCompile(`(?i)metronoo?me`)
+
 func run(flags flags) error {
 	files, err := os.ReadDir(flags.inputDir)
 	if err != nil {
 		return fmt.Errorf("failed to read input directory %q: %w", flags.inputDir, err)
 	}
 
-	tracks := []string{}
+	var tracks Tracks
 	for _, file := range files {
 		if file.IsDir() || strings.HasPrefix(file.Name(), ".") {
 			continue
 		}
-		if audioExt[filepath.Ext(file.Name())] {
-			tracks = append(tracks, filepath.Join(flags.inputDir, file.Name()))
+		if !audioExt[filepath.Ext(file.Name())] {
+			continue
 		}
+
+		infile := filepath.Join(flags.inputDir, file.Name())
+
+		if rxMetronome.MatchString(file.Name()) {
+			if tracks.Metronome != "" {
+				return fmt.Errorf("multiple metronome tracks, found %v and %v", tracks.Metronome, infile)
+			}
+			tracks.Metronome = infile
+			continue
+		}
+
+		tracks.Parts = append(tracks.Parts, infile)
 	}
 
-	if flags.trackplay {
-		_ = os.MkdirAll(filepath.Join(flags.outputDir, "trackplay"), 0755)
-		// trackplay
-		for _, track := range tracks {
-			dest := filepath.Join(flags.outputDir, "trackplay", strings.TrimSpace(filepath.Base(track)))
-			dest = removeExt(dest) + ".mp3"
+	rehearsalTracks(filepath.Join(flags.outputDir, "Rehearse"), tracks, flags)
+	individualTracks(filepath.Join(flags.outputDir, "Individual"), tracks, flags)
+	combinedTrack(flags.outputDir, tracks, flags)
 
-			cmd := exec.Command("ffmpeg", "-i", track, "-ac", "1", dest)
-			cmd.Stderr = os.Stderr
-			cmd.Stdout = os.Stdout
-			if err := cmd.Run(); err != nil {
-				return fmt.Errorf("failed %q: %w", strings.Join(cmd.Args, " "), err)
+	return nil
+}
+
+type Tracks struct {
+	Metronome string
+	Parts     []string
+}
+
+func rehearsalTracks(outdir string, tracks Tracks, flags flags) error {
+	_ = os.MkdirAll(outdir, 0755)
+
+	for target, track := range tracks.Parts {
+		args := []string{"-y"}
+
+		for _, track := range tracks.Parts {
+			args = append(args, "-i", track)
+		}
+		if tracks.Metronome != "" {
+			args =append(args, "-i", tracks.Metronome)
+		}
+
+		// add inputs to -filter_complex
+		amerge := ""
+		for i := range tracks.Parts {
+			amerge += fmt.Sprintf("[%d:a]", i)
+		}
+		if tracks.Metronome != "" {
+			amerge += fmt.Sprintf("[%d:a]", len(tracks.Parts))
+		}
+
+		if tracks.Metronome != "" {
+			amerge += fmt.Sprintf(" amerge=inputs=%d", len(tracks.Parts)+1)
+		} else {
+			amerge += fmt.Sprintf(" amerge=inputs=%d", len(tracks.Parts))
+		}
+
+		amerge += ",pan=stereo"
+		left := ""
+		right := ""
+		for k := range tracks.Parts {
+			pan := 1 - flags.pan
+			gain := flags.gain / math.Log2(float64(len(tracks.Parts)))
+			if k == target {
+				pan = 1 - pan
+				gain = 1
+			}
+			gain *= 0.5
+
+			if pan < 1 {
+				if left != "" {
+					left += "+"
+				}
+				left += fmt.Sprintf("%.2f*c%d+%.2f*c%d", gain*(1-pan), 2*k, gain*(1-pan), 2*k+1)
+			}
+			if pan > 0 {
+				if right != "" {
+					right += "+"
+				}
+				right += fmt.Sprintf("%.2f*c%d+%.2f*c%d", gain*pan, 2*k, gain*pan, 2*k+1)
 			}
 		}
-		data, _ := json.MarshalIndent(createTrackplayIndex(tracks), "", "\t")
-		indexPath := filepath.Join(flags.outputDir, "trackplay", "index.json")
-		if err = os.WriteFile(indexPath, data, 0755); err != nil {
-			return fmt.Errorf("failed to write index: %w", err)
+
+		if tracks.Metronome != "" {
+			metronome := fmt.Sprintf("+%.2f*c%d+%.2f*c%d", flags.metronomeGain, len(tracks.Parts)*2, flags.metronomeGain, len(tracks.Parts)*2+1)
+			left += metronome
+			right += metronome
 		}
-	}
 
-	if !flags.skipRehearse {
-		outdir := flags.outputDir
-		// individual rehearsal tracks
-		if flags.trackplay {
-			outdir = filepath.Join(outdir, "rehearsal")
+		amerge += "|c0=" + left + "|c1=" + right
+		amerge += ",loudnorm"
+		args = append(args, "-filter_complex", amerge)
+
+		dest := filepath.Join(outdir, strings.TrimSpace(filepath.Base(track)))
+		dest = removeExt(dest) + ".mp3"
+		args = append(args, dest)
+
+		fmt.Print("$ ffmpeg")
+		for _, arg := range args {
+			fmt.Printf(" %q", arg)
 		}
-		_ = os.MkdirAll(outdir, 0755)
-		for target, track := range tracks {
-			args := []string{"-y"}
+		fmt.Println()
 
-			for _, track := range tracks {
-				args = append(args, "-i", track)
-			}
-
-			// add inputs to -filter_complex
-			amerge := ""
-			for i := range tracks {
-				amerge += fmt.Sprintf("[%d:a]", i)
-			}
-			amerge += fmt.Sprintf("amerge=inputs=%d", len(tracks))
-			amerge += ",pan=stereo"
-			left := ""
-			right := ""
-			for k := range tracks {
-				pan := 1 - flags.pan
-				gain := flags.gain / math.Log2(float64(len(tracks)))
-				if k == target {
-					pan = 1 - pan
-					gain = 1
-				}
-				gain *= 0.5
-
-				if pan < 1 {
-					if left != "" {
-						left += "+"
-					}
-					left += fmt.Sprintf("%.2f*c%d+%.2f*c%d", gain*(1-pan), 2*k, gain*(1-pan), 2*k+1)
-				}
-				if pan > 0 {
-					if right != "" {
-						right += "+"
-					}
-					right += fmt.Sprintf("%.2f*c%d+%.2f*c%d", gain*pan, 2*k, gain*pan, 2*k+1)
-				}
-			}
-			amerge += "|c0=" + left + "|c1=" + right
-			args = append(args, "-filter_complex", amerge)
-
-			dest := filepath.Join(outdir, strings.TrimSpace(filepath.Base(track)))
-			dest = removeExt(dest) + ".mp3"
-			args = append(args, dest)
-
-			cmd := exec.Command("ffmpeg", args...)
-			cmd.Stderr = os.Stderr
-			cmd.Stdout = os.Stdout
-			if err := cmd.Run(); err != nil {
-				return fmt.Errorf("failed %q: %w", strings.Join(cmd.Args, " "), err)
-			}
+		cmd := exec.Command("ffmpeg", args...)
+		cmd.Stderr = os.Stderr
+		cmd.Stdout = os.Stdout
+		if err := cmd.Run(); err != nil {
+			return fmt.Errorf("failed %q: %w", strings.Join(cmd.Args, " "), err)
 		}
 	}
 
 	return nil
 }
 
-type trackplayIndex struct {
-	Tracks []trackplayTrack `json:"tracks"`
-}
-type trackplayTrack struct {
-	Name      string  `json:"name"`
-	StereoPan float64 `json:"stereoPan"`
-	Gain      float64 `json:"gain"`
-}
+func individualTracks(outdir string, tracks Tracks, flags flags) error {
+	_ = os.MkdirAll(outdir, 0755)
 
-func createTrackplayIndex(tracks []string) trackplayIndex {
-	order := []string{
-		"Solo",
-		"Soprano",
-		"Alto",
-		"Tenor",
-		"Baritone",
-		"Bass",
-	}
+	for _, track := range tracks.Parts {
+		args := []string{"-y"}
 
-	index := trackplayIndex{}
+		if tracks.Metronome != "" {
+			args = append(args, "-i", track, "-i", tracks.Metronome)
+		} else {
+			args = append(args, "-i", track)
+		}
 
-	add := func(path string) {
-		index.Tracks = append(index.Tracks, trackplayTrack{
-			Name:      removeExt(strings.TrimSpace(filepath.Base(path))),
-			StereoPan: -0.8,
-			Gain:      0.5,
-		})
-	}
+		amerge := ""
+		if tracks.Metronome != "" {
+			amerge = "[0:a][1:a] amerge=inputs=2"
+		} else {
+			amerge = "[0:a] amerge=inputs=1"
+		}
+		amerge += ",pan=stereo"
 
-	left := slices.Clone(tracks)
-	slices.Sort(left)
-	for _, item := range order {
-		off := 0
-		for i, path := range left {
-			if strings.Contains(path, item) {
-				add(path)
-				left = slices.Delete(left, i+off, i+off+1)
-				off--
-			}
+		var mix string
+		if tracks.Metronome != "" {
+			mix = fmt.Sprintf("c0+c1+%.2f*c2+%.2f*c3", flags.metronomeGain, flags.metronomeGain)
+		} else {
+			mix = "c0+c1"
+		}
+
+		amerge += "|c0=" + mix + "|c1=" + mix
+		amerge += ",loudnorm"
+		args = append(args, "-filter_complex", amerge)
+
+		dest := filepath.Join(outdir, strings.TrimSpace(filepath.Base(track)))
+		dest = removeExt(dest) + ".mp3"
+		args = append(args, dest)
+
+		fmt.Print("$ ffmpeg")
+		for _, arg := range args {
+			fmt.Printf(" %q", arg)
+		}
+		fmt.Println()
+
+		cmd := exec.Command("ffmpeg", args...)
+		cmd.Stderr = os.Stderr
+		cmd.Stdout = os.Stdout
+		if err := cmd.Run(); err != nil {
+			return fmt.Errorf("failed %q: %w", strings.Join(cmd.Args, " "), err)
 		}
 	}
 
-	for _, p := range left {
-		add(p)
-	}
+	return nil
+}
 
-	return index
+func combinedTrack(outdir string, tracks Tracks, flags flags) error {
+	_ = os.MkdirAll(outdir, 0755)
+	// TODO:
+	return nil
 }
 
 func removeExt(p string) string {
 	return p[:len(p)-len(filepath.Ext(p))]
-}
-
-func rehearsal(flags flags, tracks []string) error {
-	return nil
 }
 
 func check(v bool, format string, args ...interface{}) error {
