@@ -19,6 +19,10 @@ type flags struct {
 	pan       float64
 
 	metronomeGain float64
+
+	onlyRehearsal  bool
+	onlyIndividual bool
+	onlyCombined   bool
 }
 
 func main() {
@@ -29,6 +33,10 @@ func main() {
 	flag.Float64Var(&flags.pan, "pan", 1, "pan for rehearsal track")
 	flag.Float64Var(&flags.metronomeGain, "metronome", 0.5, "metronome gain")
 
+	flag.BoolVar(&flags.onlyRehearsal, "only-rehearsal", false, "only output rehearsal")
+	flag.BoolVar(&flags.onlyIndividual, "only-individual", false, "only output individual")
+	flag.BoolVar(&flags.onlyCombined, "only-combined", false, "only output combined")
+
 	flag.Parse()
 
 	flagErr := combine(
@@ -38,6 +46,12 @@ func main() {
 	if flagErr != nil {
 		flag.Usage()
 		os.Exit(1)
+	}
+
+	if !(flags.onlyRehearsal || flags.onlyIndividual || flags.onlyCombined) {
+		flags.onlyRehearsal = true
+		flags.onlyIndividual = true
+		flags.onlyCombined = true
 	}
 
 	runErr := run(flags)
@@ -83,9 +97,15 @@ func run(flags flags) error {
 		tracks.Parts = append(tracks.Parts, infile)
 	}
 
-	rehearsalTracks(filepath.Join(flags.outputDir, "Rehearse"), tracks, flags)
-	individualTracks(filepath.Join(flags.outputDir, "Individual"), tracks, flags)
-	combinedTrack(flags.outputDir, tracks, flags)
+	if flags.onlyRehearsal {
+		rehearsalTracks(filepath.Join(flags.outputDir, "Rehearse"), tracks, flags)
+	}
+	if flags.onlyIndividual {
+		individualTracks(filepath.Join(flags.outputDir, "Individual"), tracks, flags)
+	}
+	if flags.onlyCombined {
+		combinedTrack(flags.outputDir, tracks, flags)
+	}
 
 	return nil
 }
@@ -105,7 +125,7 @@ func rehearsalTracks(outdir string, tracks Tracks, flags flags) error {
 			args = append(args, "-i", track)
 		}
 		if tracks.Metronome != "" {
-			args =append(args, "-i", tracks.Metronome)
+			args = append(args, "-i", tracks.Metronome)
 		}
 
 		// add inputs to -filter_complex
