@@ -34,7 +34,7 @@ func main() {
 	flag.StringVar(&flags.outputDir, "out", "", "output directory")
 	flag.Float64Var(&flags.gain, "gain", 1, "gain adjustment for background tracks")
 	flag.Float64Var(&flags.pan, "pan", 1, "pan for rehearsal track")
-	flag.Float64Var(&flags.metronomeGain, "metronome", 0.5, "metronome gain")
+	flag.Float64Var(&flags.metronomeGain, "metronome", 0.3, "metronome gain")
 
 	flag.BoolVar(&flags.onlyRehearsal, "only-rehearsal", false, "only output rehearsal")
 	flag.BoolVar(&flags.onlyIndividual, "only-individual", false, "only output individual")
