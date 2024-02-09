@@ -23,6 +23,9 @@ type flags struct {
 	onlyRehearsal  bool
 	onlyIndividual bool
 	onlyCombined   bool
+
+	selectTracks string
+	ignoreTracks string
 }
 
 func main() {
@@ -36,6 +39,9 @@ func main() {
 	flag.BoolVar(&flags.onlyRehearsal, "only-rehearsal", false, "only output rehearsal")
 	flag.BoolVar(&flags.onlyIndividual, "only-individual", false, "only output individual")
 	flag.BoolVar(&flags.onlyCombined, "only-combined", false, "only output combined")
+
+	flag.StringVar(&flags.selectTracks, "select", "", "only create output for the specified tracks")
+	flag.StringVar(&flags.ignoreTracks, "ignore", "", "ignore specified track files")
 
 	flag.Parse()
 
@@ -75,6 +81,8 @@ func run(flags flags) error {
 		return fmt.Errorf("failed to read input directory %q: %w", flags.inputDir, err)
 	}
 
+	rxIgnore := regexp.MustCompile("(?i)" + flags.ignoreTracks)
+
 	var tracks Tracks
 	for _, file := range files {
 		if file.IsDir() || strings.HasPrefix(file.Name(), ".") {
@@ -85,6 +93,10 @@ func run(flags flags) error {
 		}
 
 		infile := filepath.Join(flags.inputDir, file.Name())
+
+		if rxIgnore.MatchString(file.Name()) {
+			continue
+		}
 
 		if rxMetronome.MatchString(file.Name()) {
 			if tracks.Metronome != "" {
@@ -118,7 +130,13 @@ type Tracks struct {
 func rehearsalTracks(outdir string, tracks Tracks, flags flags) error {
 	_ = os.MkdirAll(outdir, 0755)
 
+	rxOnly := regexp.MustCompile("(?i)" + flags.selectTracks)
+
 	for target, track := range tracks.Parts {
+		if flags.selectTracks != "" && !rxOnly.MatchString(track) {
+			continue
+		}
+
 		args := []string{"-y"}
 
 		for _, track := range tracks.Parts {
@@ -203,7 +221,13 @@ func rehearsalTracks(outdir string, tracks Tracks, flags flags) error {
 func individualTracks(outdir string, tracks Tracks, flags flags) error {
 	_ = os.MkdirAll(outdir, 0755)
 
+	rxOnly := regexp.MustCompile("(?i)" + flags.selectTracks)
+
 	for _, track := range tracks.Parts {
+		if flags.selectTracks != "" && !rxOnly.MatchString(track) {
+			continue
+		}
+
 		args := []string{"-y"}
 
 		if tracks.Metronome != "" {
