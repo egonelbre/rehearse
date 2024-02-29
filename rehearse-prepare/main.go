@@ -94,7 +94,7 @@ func run(flags flags) error {
 
 		infile := filepath.Join(flags.inputDir, file.Name())
 
-		if rxIgnore.MatchString(file.Name()) {
+		if flags.ignoreTracks != "" && rxIgnore.MatchString(file.Name()) {
 			continue
 		}
 
