@@ -232,6 +232,7 @@ func rehearsalTrack(outdir string, tracks Tracks, flags flags, target int, track
 	for _, arg := range args {
 		fmt.Fprintf(&buffer, " %q", arg)
 	}
+	fmt.Fprintln(&buffer)
 
 	cmd := exec.Command("ffmpeg", args...)
 	cmd.Stderr = &buffer
@@ -305,6 +306,7 @@ func individualTrack(outdir string, tracks Tracks, flags flags, track string) er
 	for _, arg := range args {
 		fmt.Fprintf(&buffer, " %q", arg)
 	}
+	fmt.Fprintln(&buffer)
 
 	cmd := exec.Command("ffmpeg", args...)
 	cmd.Stderr = &buffer
