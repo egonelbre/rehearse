@@ -13,6 +13,9 @@ import (
 	"sync"
 
 	"golang.org/x/sync/errgroup"
+
+	"github.com/go-audio/aiff"
+	"github.com/go-audio/wav"
 )
 
 type flags struct {
@@ -41,7 +44,7 @@ func main() {
 	flag.StringVar(&flags.outputDir, "out", "", "output directory")
 	flag.Float64Var(&flags.gain, "gain", 1, "gain adjustment for background tracks")
 	flag.Float64Var(&flags.pan, "pan", 1, "pan for rehearsal track")
-	flag.Float64Var(&flags.metronomeGain, "metronome", 0.3, "metronome gain")
+	flag.Float64Var(&flags.metronomeGain, "metronome", 0.6, "metronome gain")
 
 	flag.BoolVar(&flags.onlyRehearsal, "only-rehearsal", false, "only output rehearsal")
 	flag.BoolVar(&flags.onlyIndividual, "only-individual", false, "only output individual")
@@ -106,14 +109,20 @@ func run(flags flags) error {
 		}
 
 		if rxMetronome.MatchString(file.Name()) {
-			if tracks.Metronome != "" {
+			if tracks.Metronome.Path != "" {
 				return fmt.Errorf("multiple metronome tracks, found %v and %v", tracks.Metronome, infile)
 			}
-			tracks.Metronome = infile
+			tracks.Metronome = Track{
+				Path:     infile,
+				Channels: readAudioChannelCount(infile),
+			}
 			continue
 		}
 
-		tracks.Parts = append(tracks.Parts, infile)
+		tracks.Parts = append(tracks.Parts, Track{
+			Path:     infile,
+			Channels: readAudioChannelCount(infile),
+		})
 	}
 
 	group := new(errgroup.Group)
@@ -136,8 +145,13 @@ func run(flags flags) error {
 }
 
 type Tracks struct {
-	Metronome string
-	Parts     []string
+	Metronome Track
+	Parts     []Track
+}
+
+type Track struct {
+	Path     string
+	Channels int
 }
 
 func rehearsalTracks(group *errgroup.Group, outdir string, tracks Tracks, flags flags) error {
@@ -145,13 +159,13 @@ func rehearsalTracks(group *errgroup.Group, outdir string, tracks Tracks, flags 
 
 	rxOnly := regexp.MustCompile("(?i)" + flags.selectTracks)
 
-	for target, track := range tracks.Parts {
-		if flags.selectTracks != "" && !rxOnly.MatchString(track) {
+	for _, track := range tracks.Parts {
+		if flags.selectTracks != "" && !rxOnly.MatchString(track.Path) {
 			continue
 		}
 
 		group.Go(func() error {
-			err := rehearsalTrack(outdir, tracks, flags, target, track)
+			err := rehearsalTrack(outdir, tracks, flags, track)
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "Track %q failed: %v\n", track, err)
 			}
@@ -162,68 +176,72 @@ func rehearsalTracks(group *errgroup.Group, outdir string, tracks Tracks, flags 
 	return nil
 }
 
-func rehearsalTrack(outdir string, tracks Tracks, flags flags, target int, track string) error {
+func rehearsalTrack(outdir string, tracks Tracks, flags flags, track Track) error {
 	args := []string{"-y"}
 
+	inputCount := 0
 	for _, track := range tracks.Parts {
-		args = append(args, "-i", track)
+		args = append(args, "-i", track.Path)
+		inputCount++
 	}
-	if tracks.Metronome != "" {
-		args = append(args, "-i", tracks.Metronome)
+	if tracks.Metronome.Path != "" {
+		args = append(args, "-i", tracks.Metronome.Path)
+		inputCount++
 	}
 
 	// add inputs to -filter_complex
 	amerge := ""
-	for i := range tracks.Parts {
+	for i := range inputCount {
 		amerge += fmt.Sprintf("[%d:a]", i)
 	}
-	if tracks.Metronome != "" {
-		amerge += fmt.Sprintf("[%d:a]", len(tracks.Parts))
-	}
+	amerge += fmt.Sprintf(" amerge=inputs=%d,pan=stereo", inputCount)
 
-	if tracks.Metronome != "" {
-		amerge += fmt.Sprintf(" amerge=inputs=%d", len(tracks.Parts)+1)
-	} else {
-		amerge += fmt.Sprintf(" amerge=inputs=%d", len(tracks.Parts))
-	}
+	left := []string{}
+	right := []string{}
 
-	amerge += ",pan=stereo"
-	left := ""
-	right := ""
-	for k := range tracks.Parts {
+	mergedChannelIndex := 0
+	for _, target := range tracks.Parts {
 		pan := 1 - flags.pan
 		gain := flags.gain / math.Log2(float64(len(tracks.Parts)))
-		if k == target {
+		if target == track {
 			pan = 1 - pan
 			gain = 1
 		}
-		gain *= 0.5
+
+		gain /= float64(target.Channels)
 
 		if pan < 1 {
-			if left != "" {
-				left += "+"
+			for i := range target.Channels {
+				left = append(left, fmt.Sprintf("%.2f*c%d", gain*(1-pan), mergedChannelIndex+i))
 			}
-			left += fmt.Sprintf("%.2f*c%d+%.2f*c%d", gain*(1-pan), 2*k, gain*(1-pan), 2*k+1)
 		}
 		if pan > 0 {
-			if right != "" {
-				right += "+"
+			for i := range target.Channels {
+				right = append(right, fmt.Sprintf("%.2f*c%d", gain*pan, mergedChannelIndex+i))
 			}
-			right += fmt.Sprintf("%.2f*c%d+%.2f*c%d", gain*pan, 2*k, gain*pan, 2*k+1)
 		}
+
+		mergedChannelIndex += target.Channels
 	}
 
-	if tracks.Metronome != "" {
-		metronome := fmt.Sprintf("+%.2f*c%d+%.2f*c%d", flags.metronomeGain, len(tracks.Parts)*2, flags.metronomeGain, len(tracks.Parts)*2+1)
-		left += metronome
-		right += metronome
+	if tracks.Metronome.Path != "" {
+		metronome := []string{}
+		gain := flags.metronomeGain / float64(tracks.Metronome.Channels)
+		for i := range tracks.Metronome.Channels {
+			metronome = append(metronome, fmt.Sprintf("%.2f*c%d", gain, mergedChannelIndex+i))
+		}
+
+		left = append(left, metronome...)
+		right = append(right, metronome...)
+
+		mergedChannelIndex += tracks.Metronome.Channels
 	}
 
-	amerge += "|c0=" + left + "|c1=" + right
+	amerge += "|c0=" + strings.Join(left, "+") + "|c1=" + strings.Join(right, "+")
 	amerge += ",loudnorm"
 	args = append(args, "-filter_complex", amerge)
 
-	dest := filepath.Join(outdir, strings.TrimSpace(filepath.Base(track)))
+	dest := filepath.Join(outdir, strings.TrimSpace(filepath.Base(track.Path)))
 	dest = removeExt(dest) + ".mp3"
 	args = append(args, dest)
 
@@ -251,9 +269,8 @@ func individualTracks(group *errgroup.Group, outdir string, tracks Tracks, flags
 
 	rxOnly := regexp.MustCompile("(?i)" + flags.selectTracks)
 
-	for target, track := range tracks.Parts {
-		_ = target
-		if flags.selectTracks != "" && !rxOnly.MatchString(track) {
+	for _, track := range tracks.Parts {
+		if flags.selectTracks != "" && !rxOnly.MatchString(track.Path) {
 			continue
 		}
 
@@ -269,35 +286,45 @@ func individualTracks(group *errgroup.Group, outdir string, tracks Tracks, flags
 	return nil
 }
 
-func individualTrack(outdir string, tracks Tracks, flags flags, track string) error {
+func individualTrack(outdir string, tracks Tracks, flags flags, track Track) error {
 	args := []string{"-y"}
 
-	if tracks.Metronome != "" {
-		args = append(args, "-i", track, "-i", tracks.Metronome)
-	} else {
-		args = append(args, "-i", track)
+	inputCount := 1
+	args = append(args, "-i", track.Path)
+	if tracks.Metronome.Path != "" {
+		inputCount++
+		args = append(args, "-i", tracks.Metronome.Path)
 	}
 
 	amerge := ""
-	if tracks.Metronome != "" {
-		amerge = "[0:a][1:a] amerge=inputs=2"
-	} else {
-		amerge = "[0:a] amerge=inputs=1"
+	for i := range inputCount {
+		amerge += fmt.Sprintf("[%d:a]", i)
 	}
-	amerge += ",pan=stereo"
+	amerge += fmt.Sprintf(" amerge=inputs=%d,pan=stereo", inputCount)
 
-	var mix string
-	if tracks.Metronome != "" {
-		mix = fmt.Sprintf("c0+c1+%.2f*c2+%.2f*c3", flags.metronomeGain, flags.metronomeGain)
-	} else {
-		mix = "c0+c1"
+	mix := []string{}
+	mergedChannelIndex := 0
+
+	{
+		for i := range track.Channels {
+			mix = append(mix, fmt.Sprintf("c%d", mergedChannelIndex+i))
+		}
+		mergedChannelIndex += track.Channels
 	}
 
-	amerge += "|c0=" + mix + "|c1=" + mix
+	if tracks.Metronome.Path != "" {
+		gain := flags.metronomeGain / float64(tracks.Metronome.Channels)
+		for i := range tracks.Metronome.Channels {
+			mix = append(mix, fmt.Sprintf("%.2f*c%d", gain, mergedChannelIndex+i))
+		}
+		mergedChannelIndex += tracks.Metronome.Channels
+	}
+
+	amerge += "|c0=" + strings.Join(mix, "+") + "|c1=" + strings.Join(mix, "+")
 	amerge += ",loudnorm"
 	args = append(args, "-filter_complex", amerge)
 
-	dest := filepath.Join(outdir, strings.TrimSpace(filepath.Base(track)))
+	dest := filepath.Join(outdir, strings.TrimSpace(filepath.Base(track.Path)))
 	dest = removeExt(dest) + ".mp3"
 	args = append(args, dest)
 
@@ -359,4 +386,43 @@ func parallel(fns ...func()) {
 		}()
 	}
 	wg.Wait()
+}
+
+func readAudioChannelCount(path string) int {
+	f, err := os.Open(path)
+	defer func() { _ = f.Close() }()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "failed to open %q, assuming stereo\n", path)
+		return 2
+	}
+
+	switch strings.ToLower(filepath.Ext(path)) {
+	case ".wav":
+		dec := wav.NewDecoder(f)
+		dec.ReadInfo()
+
+		channels := int(dec.NumChans)
+		if channels == 0 {
+			fmt.Fprintf(os.Stderr, "failed to parse %q, assuming stereo\n", path)
+			return 2
+		}
+		return int(channels)
+	case ".mp3":
+		return 0
+	case ".aiff":
+		dec := aiff.NewDecoder(f)
+		dec.ReadInfo()
+
+		channels := int(dec.NumChans)
+		if channels == 0 {
+			fmt.Fprintf(os.Stderr, "failed to parse %q, assuming stereo\n", path)
+			return 2
+		}
+		return int(channels)
+	case ".ogg":
+		return 0
+	default:
+		fmt.Fprintf(os.Stderr, "unknown file format %q, assuming stereo\n", path)
+		return 2
+	}
 }
