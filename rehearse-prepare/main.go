@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"flag"
 	"fmt"
 	"math"
@@ -10,9 +11,13 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+
+	"golang.org/x/sync/errgroup"
 )
 
 type flags struct {
+	parallel int
+
 	inputDir  string
 	outputDir string
 	gain      float64
@@ -30,6 +35,8 @@ type flags struct {
 
 func main() {
 	flags := flags{}
+	flag.IntVar(&flags.parallel, "p", 8, "parallelization")
+
 	flag.StringVar(&flags.inputDir, "in", "", "input directory")
 	flag.StringVar(&flags.outputDir, "out", "", "output directory")
 	flag.Float64Var(&flags.gain, "gain", 1, "gain adjustment for background tracks")
@@ -109,15 +116,21 @@ func run(flags flags) error {
 		tracks.Parts = append(tracks.Parts, infile)
 	}
 
+	group := new(errgroup.Group)
+	if flags.parallel > 0 {
+		group.SetLimit(flags.parallel)
+	}
+
 	if flags.onlyRehearsal {
-		rehearsalTracks(filepath.Join(flags.outputDir, "Rehearse"), tracks, flags)
+		rehearsalTracks(group, filepath.Join(flags.outputDir, "Rehearse"), tracks, flags)
 	}
 	if flags.onlyIndividual {
-		individualTracks(filepath.Join(flags.outputDir, "Individual"), tracks, flags)
+		individualTracks(group, filepath.Join(flags.outputDir, "Individual"), tracks, flags)
 	}
 	if flags.onlyCombined {
-		combinedTrack(flags.outputDir, tracks, flags)
+		combinedTrack(group, flags.outputDir, tracks, flags)
 	}
+	group.Wait()
 
 	return nil
 }
@@ -127,7 +140,7 @@ type Tracks struct {
 	Parts     []string
 }
 
-func rehearsalTracks(outdir string, tracks Tracks, flags flags) error {
+func rehearsalTracks(group *errgroup.Group, outdir string, tracks Tracks, flags flags) error {
 	_ = os.MkdirAll(outdir, 0755)
 
 	rxOnly := regexp.MustCompile("(?i)" + flags.selectTracks)
@@ -137,9 +150,13 @@ func rehearsalTracks(outdir string, tracks Tracks, flags flags) error {
 			continue
 		}
 
-		if err := rehearsalTrack(outdir, tracks, flags, target, track); err != nil {
-			return err
-		}
+		group.Go(func() error {
+			err := rehearsalTrack(outdir, tracks, flags, target, track)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Track %q failed: %v\n", track, err)
+			}
+			return nil
+		})
 	}
 
 	return nil
@@ -210,35 +227,42 @@ func rehearsalTrack(outdir string, tracks Tracks, flags flags, target int, track
 	dest = removeExt(dest) + ".mp3"
 	args = append(args, dest)
 
-	fmt.Print("$ ffmpeg")
+	var buffer bytes.Buffer
+	fmt.Fprint(&buffer, "$ ffmpeg")
 	for _, arg := range args {
-		fmt.Printf(" %q", arg)
+		fmt.Fprintf(&buffer, " %q", arg)
 	}
-	fmt.Println()
 
 	cmd := exec.Command("ffmpeg", args...)
-	cmd.Stderr = os.Stderr
-	cmd.Stdout = os.Stdout
+	cmd.Stderr = &buffer
+	cmd.Stdout = &buffer
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("failed %q: %w", strings.Join(cmd.Args, " "), err)
 	}
 
+	fmt.Println(buffer.String())
+
 	return nil
 }
 
-func individualTracks(outdir string, tracks Tracks, flags flags) error {
+func individualTracks(group *errgroup.Group, outdir string, tracks Tracks, flags flags) error {
 	_ = os.MkdirAll(outdir, 0755)
 
 	rxOnly := regexp.MustCompile("(?i)" + flags.selectTracks)
 
-	for _, track := range tracks.Parts {
+	for target, track := range tracks.Parts {
+		_ = target
 		if flags.selectTracks != "" && !rxOnly.MatchString(track) {
 			continue
 		}
 
-		if err := individualTrack(outdir, tracks, flags, track); err != nil {
-			return err
-		}
+		group.Go(func() error {
+			err := individualTrack(outdir, tracks, flags, track)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Track %q failed: %v\n", track, err)
+			}
+			return nil
+		})
 	}
 
 	return nil
@@ -276,22 +300,23 @@ func individualTrack(outdir string, tracks Tracks, flags flags, track string) er
 	dest = removeExt(dest) + ".mp3"
 	args = append(args, dest)
 
-	fmt.Print("$ ffmpeg")
+	var buffer bytes.Buffer
+	fmt.Fprint(&buffer, "$ ffmpeg")
 	for _, arg := range args {
-		fmt.Printf(" %q", arg)
+		fmt.Fprintf(&buffer, " %q", arg)
 	}
-	fmt.Println()
 
 	cmd := exec.Command("ffmpeg", args...)
-	cmd.Stderr = os.Stderr
-	cmd.Stdout = os.Stdout
+	cmd.Stderr = &buffer
+	cmd.Stdout = &buffer
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("failed %q: %w", strings.Join(cmd.Args, " "), err)
 	}
+	fmt.Println(buffer.String())
 	return nil
 }
 
-func combinedTrack(outdir string, tracks Tracks, flags flags) error {
+func combinedTrack(group *errgroup.Group, outdir string, tracks Tracks, flags flags) error {
 	_ = os.MkdirAll(outdir, 0755)
 	// TODO:
 	return nil
