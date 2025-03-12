@@ -137,82 +137,90 @@ func rehearsalTracks(outdir string, tracks Tracks, flags flags) error {
 			continue
 		}
 
-		args := []string{"-y"}
+		if err := rehearsalTrack(outdir, tracks, flags, target, track); err != nil {
+			return err
+		}
+	}
 
-		for _, track := range tracks.Parts {
-			args = append(args, "-i", track)
-		}
-		if tracks.Metronome != "" {
-			args = append(args, "-i", tracks.Metronome)
-		}
+	return nil
+}
 
-		// add inputs to -filter_complex
-		amerge := ""
-		for i := range tracks.Parts {
-			amerge += fmt.Sprintf("[%d:a]", i)
-		}
-		if tracks.Metronome != "" {
-			amerge += fmt.Sprintf("[%d:a]", len(tracks.Parts))
-		}
+func rehearsalTrack(outdir string, tracks Tracks, flags flags, target int, track string) error {
+	args := []string{"-y"}
 
-		if tracks.Metronome != "" {
-			amerge += fmt.Sprintf(" amerge=inputs=%d", len(tracks.Parts)+1)
-		} else {
-			amerge += fmt.Sprintf(" amerge=inputs=%d", len(tracks.Parts))
-		}
+	for _, track := range tracks.Parts {
+		args = append(args, "-i", track)
+	}
+	if tracks.Metronome != "" {
+		args = append(args, "-i", tracks.Metronome)
+	}
 
-		amerge += ",pan=stereo"
-		left := ""
-		right := ""
-		for k := range tracks.Parts {
-			pan := 1 - flags.pan
-			gain := flags.gain / math.Log2(float64(len(tracks.Parts)))
-			if k == target {
-				pan = 1 - pan
-				gain = 1
+	// add inputs to -filter_complex
+	amerge := ""
+	for i := range tracks.Parts {
+		amerge += fmt.Sprintf("[%d:a]", i)
+	}
+	if tracks.Metronome != "" {
+		amerge += fmt.Sprintf("[%d:a]", len(tracks.Parts))
+	}
+
+	if tracks.Metronome != "" {
+		amerge += fmt.Sprintf(" amerge=inputs=%d", len(tracks.Parts)+1)
+	} else {
+		amerge += fmt.Sprintf(" amerge=inputs=%d", len(tracks.Parts))
+	}
+
+	amerge += ",pan=stereo"
+	left := ""
+	right := ""
+	for k := range tracks.Parts {
+		pan := 1 - flags.pan
+		gain := flags.gain / math.Log2(float64(len(tracks.Parts)))
+		if k == target {
+			pan = 1 - pan
+			gain = 1
+		}
+		gain *= 0.5
+
+		if pan < 1 {
+			if left != "" {
+				left += "+"
 			}
-			gain *= 0.5
-
-			if pan < 1 {
-				if left != "" {
-					left += "+"
-				}
-				left += fmt.Sprintf("%.2f*c%d+%.2f*c%d", gain*(1-pan), 2*k, gain*(1-pan), 2*k+1)
+			left += fmt.Sprintf("%.2f*c%d+%.2f*c%d", gain*(1-pan), 2*k, gain*(1-pan), 2*k+1)
+		}
+		if pan > 0 {
+			if right != "" {
+				right += "+"
 			}
-			if pan > 0 {
-				if right != "" {
-					right += "+"
-				}
-				right += fmt.Sprintf("%.2f*c%d+%.2f*c%d", gain*pan, 2*k, gain*pan, 2*k+1)
-			}
+			right += fmt.Sprintf("%.2f*c%d+%.2f*c%d", gain*pan, 2*k, gain*pan, 2*k+1)
 		}
+	}
 
-		if tracks.Metronome != "" {
-			metronome := fmt.Sprintf("+%.2f*c%d+%.2f*c%d", flags.metronomeGain, len(tracks.Parts)*2, flags.metronomeGain, len(tracks.Parts)*2+1)
-			left += metronome
-			right += metronome
-		}
+	if tracks.Metronome != "" {
+		metronome := fmt.Sprintf("+%.2f*c%d+%.2f*c%d", flags.metronomeGain, len(tracks.Parts)*2, flags.metronomeGain, len(tracks.Parts)*2+1)
+		left += metronome
+		right += metronome
+	}
 
-		amerge += "|c0=" + left + "|c1=" + right
-		amerge += ",loudnorm"
-		args = append(args, "-filter_complex", amerge)
+	amerge += "|c0=" + left + "|c1=" + right
+	amerge += ",loudnorm"
+	args = append(args, "-filter_complex", amerge)
 
-		dest := filepath.Join(outdir, strings.TrimSpace(filepath.Base(track)))
-		dest = removeExt(dest) + ".mp3"
-		args = append(args, dest)
+	dest := filepath.Join(outdir, strings.TrimSpace(filepath.Base(track)))
+	dest = removeExt(dest) + ".mp3"
+	args = append(args, dest)
 
-		fmt.Print("$ ffmpeg")
-		for _, arg := range args {
-			fmt.Printf(" %q", arg)
-		}
-		fmt.Println()
+	fmt.Print("$ ffmpeg")
+	for _, arg := range args {
+		fmt.Printf(" %q", arg)
+	}
+	fmt.Println()
 
-		cmd := exec.Command("ffmpeg", args...)
-		cmd.Stderr = os.Stderr
-		cmd.Stdout = os.Stdout
-		if err := cmd.Run(); err != nil {
-			return fmt.Errorf("failed %q: %w", strings.Join(cmd.Args, " "), err)
-		}
+	cmd := exec.Command("ffmpeg", args...)
+	cmd.Stderr = os.Stderr
+	cmd.Stdout = os.Stdout
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("failed %q: %w", strings.Join(cmd.Args, " "), err)
 	}
 
 	return nil
@@ -228,51 +236,58 @@ func individualTracks(outdir string, tracks Tracks, flags flags) error {
 			continue
 		}
 
-		args := []string{"-y"}
-
-		if tracks.Metronome != "" {
-			args = append(args, "-i", track, "-i", tracks.Metronome)
-		} else {
-			args = append(args, "-i", track)
-		}
-
-		amerge := ""
-		if tracks.Metronome != "" {
-			amerge = "[0:a][1:a] amerge=inputs=2"
-		} else {
-			amerge = "[0:a] amerge=inputs=1"
-		}
-		amerge += ",pan=stereo"
-
-		var mix string
-		if tracks.Metronome != "" {
-			mix = fmt.Sprintf("c0+c1+%.2f*c2+%.2f*c3", flags.metronomeGain, flags.metronomeGain)
-		} else {
-			mix = "c0+c1"
-		}
-
-		amerge += "|c0=" + mix + "|c1=" + mix
-		amerge += ",loudnorm"
-		args = append(args, "-filter_complex", amerge)
-
-		dest := filepath.Join(outdir, strings.TrimSpace(filepath.Base(track)))
-		dest = removeExt(dest) + ".mp3"
-		args = append(args, dest)
-
-		fmt.Print("$ ffmpeg")
-		for _, arg := range args {
-			fmt.Printf(" %q", arg)
-		}
-		fmt.Println()
-
-		cmd := exec.Command("ffmpeg", args...)
-		cmd.Stderr = os.Stderr
-		cmd.Stdout = os.Stdout
-		if err := cmd.Run(); err != nil {
-			return fmt.Errorf("failed %q: %w", strings.Join(cmd.Args, " "), err)
+		if err := individualTrack(outdir, tracks, flags, track); err != nil {
+			return err
 		}
 	}
 
+	return nil
+}
+
+func individualTrack(outdir string, tracks Tracks, flags flags, track string) error {
+	args := []string{"-y"}
+
+	if tracks.Metronome != "" {
+		args = append(args, "-i", track, "-i", tracks.Metronome)
+	} else {
+		args = append(args, "-i", track)
+	}
+
+	amerge := ""
+	if tracks.Metronome != "" {
+		amerge = "[0:a][1:a] amerge=inputs=2"
+	} else {
+		amerge = "[0:a] amerge=inputs=1"
+	}
+	amerge += ",pan=stereo"
+
+	var mix string
+	if tracks.Metronome != "" {
+		mix = fmt.Sprintf("c0+c1+%.2f*c2+%.2f*c3", flags.metronomeGain, flags.metronomeGain)
+	} else {
+		mix = "c0+c1"
+	}
+
+	amerge += "|c0=" + mix + "|c1=" + mix
+	amerge += ",loudnorm"
+	args = append(args, "-filter_complex", amerge)
+
+	dest := filepath.Join(outdir, strings.TrimSpace(filepath.Base(track)))
+	dest = removeExt(dest) + ".mp3"
+	args = append(args, dest)
+
+	fmt.Print("$ ffmpeg")
+	for _, arg := range args {
+		fmt.Printf(" %q", arg)
+	}
+	fmt.Println()
+
+	cmd := exec.Command("ffmpeg", args...)
+	cmd.Stderr = os.Stderr
+	cmd.Stdout = os.Stdout
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("failed %q: %w", strings.Join(cmd.Args, " "), err)
+	}
 	return nil
 }
 
