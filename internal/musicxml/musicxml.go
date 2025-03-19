@@ -1,6 +1,9 @@
 package musicxml
 
-import "encoding/xml"
+import (
+	"fmt"
+	"encoding/xml"
+)
 
 // From xsd simple type with enumerate restriction "above-below"
 type AboveBelow string
@@ -1910,7 +1913,7 @@ type WavyLine struct {
 type Attributes struct {
 	Name string `xml:"-"`
 	GroupEditorial
-	Divisions    string          `xml:"divisions,omitempty"`
+	Divisions    int             `xml:"divisions,omitempty"`
 	Key          []*Key          `xml:"key,omitempty"`
 	Time         []*Time         `xml:"time,omitempty"`
 	Staves       int             `xml:"staves,omitempty"`
@@ -2328,7 +2331,7 @@ type Barline struct {
 	Location  string `xml:"location,attr,omitempty"`
 	Segno     string `xml:"segno,attr,omitempty"`
 	Coda      string `xml:"coda,attr,omitempty"`
-	Divisions string `xml:"divisions,attr,omitempty"`
+	Divisions int `xml:"divisions,attr,omitempty"`
 	AttributeGroupOptionalUniqueId
 	BarStyle *BarStyleColor `xml:"bar-style,omitempty"`
 	GroupEditorial
@@ -3307,7 +3310,7 @@ type Sound struct {
 	Dalsegno       string   `xml:"dalsegno,attr,omitempty"`
 	Coda           string   `xml:"coda,attr,omitempty"`
 	Tocoda         string   `xml:"tocoda,attr,omitempty"`
-	Divisions      string   `xml:"divisions,attr,omitempty"`
+	Divisions      int   `xml:"divisions,attr,omitempty"`
 	ForwardRepeat  YesNo    `xml:"forward-repeat,attr,omitempty"`
 	Fine           string   `xml:"fine,attr,omitempty"`
 	TimeOnly       TimeOnly `xml:"time-only,attr,omitempty"`
@@ -5155,8 +5158,8 @@ type GroupSlash struct {
 
 // GroupTimeSignature UnNamed source named group "time-signature"
 type GroupTimeSignature struct {
-	Beats    string `xml:"beats,omitempty"`
-	BeatType string `xml:"beat-type,omitempty"`
+	Beats    int `xml:"beats,omitempty"`
+	BeatType int `xml:"beat-type,omitempty"`
 }
 
 // GroupTraditionalKey UnNamed source named group "traditional-key"
@@ -5232,6 +5235,8 @@ type GroupFullNote struct {
 
 // GroupMusicData UnNamed source named group "music-data"
 type GroupMusicData struct {
+	Element []GroupMusicElement `xml:",any,omitempty"`
+	/*
 	Note        []*Note        `xml:"note,omitempty"`
 	Backup      []*Backup      `xml:"backup,omitempty"`
 	Forward     []*Forward     `xml:"forward,omitempty"`
@@ -5246,6 +5251,81 @@ type GroupMusicData struct {
 	Grouping    []*Grouping    `xml:"grouping,omitempty"`
 	Link        []*Link        `xml:"link,omitempty"`
 	Bookmark    []*Bookmark    `xml:"bookmark,omitempty"`
+	*/
+}
+
+type GroupMusicElement struct {
+	Value any
+	/*
+	one of:
+
+	Note        *Note        `xml:"note,omitempty"`
+	Backup      *Backup      `xml:"backup,omitempty"`
+	Forward     *Forward     `xml:"forward,omitempty"`
+	Direction   *Direction   `xml:"direction,omitempty"`
+	Attributes  *Attributes  `xml:"attributes,omitempty"`
+	Harmony     *Harmony     `xml:"harmony,omitempty"`
+	FiguredBass *FiguredBass `xml:"figured-bass,omitempty"`
+	Print       *Print       `xml:"print,omitempty"`
+	Sound       *Sound       `xml:"sound,omitempty"`
+	Listening   *Listening   `xml:"listening,omitempty"`
+	Barline     *Barline     `xml:"barline,omitempty"`
+	Grouping    *Grouping    `xml:"grouping,omitempty"`
+	Link        *Link        `xml:"link,omitempty"`
+	Bookmark    *Bookmark    `xml:"bookmark,omitempty"`
+	*/
+}
+
+// Implements encoding.xml.Unmarshaler interface
+func (element *GroupMusicElement) UnmarshalXML(decoder *xml.Decoder, start xml.StartElement) (err error) {
+	switch start.Name.Local {
+	case "note":
+		element.Value = new(Note)
+		err = decoder.DecodeElement(element.Value, &start)
+	case "backup":
+		element.Value = new(Backup)
+		err = decoder.DecodeElement(element.Value, &start)
+	case "forward":
+		element.Value = new(Forward)
+		err = decoder.DecodeElement(element.Value, &start)
+	case "direction":
+		element.Value = new(Direction)
+		err = decoder.DecodeElement(element.Value, &start)
+	case "attributes":
+		element.Value = new(Attributes)
+		err = decoder.DecodeElement(element.Value, &start)
+	case "harmony":
+		element.Value = new(Harmony)
+		err = decoder.DecodeElement(element.Value, &start)
+	case "figured-bass":
+		element.Value = new(FiguredBass)
+		err = decoder.DecodeElement(element.Value, &start)
+	case "print":
+		element.Value = new(Print)
+		err = decoder.DecodeElement(element.Value, &start)
+	case "sound":
+		element.Value = new(Sound)
+		err = decoder.DecodeElement(element.Value, &start)
+	case "listening":
+		element.Value = new(Listening)
+		err = decoder.DecodeElement(element.Value, &start)
+	case "barline":
+		element.Value = new(Barline)
+		err = decoder.DecodeElement(element.Value, &start)
+	case "grouping":
+		element.Value = new(Grouping)
+		err = decoder.DecodeElement(element.Value, &start)
+	case "link":
+		element.Value = new(Link)
+		err = decoder.DecodeElement(element.Value, &start)
+	case "bookmark":
+		element.Value = new(Bookmark)
+		err = decoder.DecodeElement(element.Value, &start)
+	default:
+		return fmt.Errorf("unknown tag %q", start.Name)
+	}
+
+	return err
 }
 
 // GroupPartGroup UnNamed source named group "part-group"
@@ -5266,7 +5346,7 @@ type GroupScoreHeader struct {
 
 // GroupScorePart UnNamed source named group "score-part"
 type GroupScorePart struct {
-	ScorePart *ScorePart `xml:"score-part,omitempty"`
+	ScorePart []*ScorePart `xml:"score-part,omitempty"`
 }
 
 // ScorePartwise Named source element score-partwise within root schema
@@ -5276,26 +5356,26 @@ type GroupScorePart struct {
 type ScorePartwise struct {
 	Name    string   `xml:"-"`
 	XMLName xml.Name `xml:"score-partwise"`
-	AScorePartwise
+	ScorePartwiseInfo
 }
 
-// AScorePartwise Named source within outer element "score-partwise"
-type AScorePartwise struct {
+// ScorePartwiseInfo Named source within outer element "score-partwise"
+type ScorePartwiseInfo struct {
 	Name string `xml:"-"`
 	AttributeGroupDocumentAttributes
 	GroupScoreHeader
-	Part []*APart `xml:"part,omitempty"`
+	Part []*Part `xml:"part,omitempty"`
 }
 
-// APart Named source within outer element "part"
-type APart struct {
+// Part Named source within outer element "part"
+type Part struct {
 	Name string `xml:"-"`
 	AttributeGroupPartAttributes
-	Measure []*AMeasure `xml:"measure,omitempty"`
+	Measure []*Measure `xml:"measure,omitempty"`
 }
 
-// AMeasure Named source within outer element "measure"
-type AMeasure struct {
+// Measure Named source within outer element "measure"
+type Measure struct {
 	Name string `xml:"-"`
 	AttributeGroupMeasureAttributes
 	GroupMusicData
@@ -5308,26 +5388,26 @@ type AMeasure struct {
 type ScoreTimewise struct {
 	Name    string   `xml:"-"`
 	XMLName xml.Name `xml:"score-timewise"`
-	AScoreTimewise
+	ScoreTimewiseInfo
 }
 
-// AScoreTimewise Named source within outer element "score-timewise"
-type AScoreTimewise struct {
+// ScoreTimewiseInfo Named source within outer element "score-timewise"
+type ScoreTimewiseInfo struct {
 	Name string `xml:"-"`
 	AttributeGroupDocumentAttributes
 	GroupScoreHeader
-	Measure []*AMeasure1 `xml:"measure,omitempty"`
+	Measure []*TimewiseMeasure `xml:"measure,omitempty"`
 }
 
-// AMeasure1 Named source within outer element "measure"
-type AMeasure1 struct {
+// TimewiseMeasure Named source within outer element "measure"
+type TimewiseMeasure struct {
 	Name string `xml:"-"`
 	AttributeGroupMeasureAttributes
-	Part []*APart1 `xml:"part,omitempty"`
+	Part []*TimewisePart `xml:"part,omitempty"`
 }
 
-// APart1 Named source within outer element "part"
-type APart1 struct {
+// TimewisePart Named source within outer element "part"
+type TimewisePart struct {
 	Name string `xml:"-"`
 	AttributeGroupPartAttributes
 	GroupMusicData
