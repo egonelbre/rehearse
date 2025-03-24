@@ -130,6 +130,20 @@ func run(flags flags) error {
 		group.SetLimit(flags.parallel)
 	}
 
+	if tracks.Metronome.Path != "" {
+		if flags.onlyRehearsal {
+			rehearsalTracks(group, filepath.Join(flags.outputDir, "Rehearse + metronome"), tracks, flags)
+		}
+		if flags.onlyIndividual {
+			individualTracks(group, filepath.Join(flags.outputDir, "Individual + metronome"), tracks, flags)
+		}
+		if flags.onlyCombined {
+			combinedTrack(group, flags.outputDir, tracks, flags)
+		}
+	}
+	tracks.Metronome.Path = ""
+	tracks.Metronome.Channels = 0
+
 	if flags.onlyRehearsal {
 		rehearsalTracks(group, filepath.Join(flags.outputDir, "Rehearse"), tracks, flags)
 	}
@@ -139,6 +153,7 @@ func run(flags flags) error {
 	if flags.onlyCombined {
 		combinedTrack(group, flags.outputDir, tracks, flags)
 	}
+
 	group.Wait()
 
 	return nil
