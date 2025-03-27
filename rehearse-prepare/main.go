@@ -141,8 +141,7 @@ func run(flags flags) error {
 			combinedTrack(group, flags.outputDir, tracks, flags)
 		}
 	}
-	tracks.Metronome.Path = ""
-	tracks.Metronome.Channels = 0
+	tracks.Metronome = Track{}
 
 	if flags.onlyRehearsal {
 		rehearsalTracks(group, filepath.Join(flags.outputDir, "Rehearse"), tracks, flags)
@@ -423,7 +422,8 @@ func readAudioChannelCount(path string) int {
 		}
 		return int(channels)
 	case ".mp3":
-		return 0
+		fmt.Fprintf(os.Stderr, "failed to parse %q, assuming stereo\n", path)
+		return 2
 	case ".aiff":
 		dec := aiff.NewDecoder(f)
 		dec.ReadInfo()
@@ -435,7 +435,8 @@ func readAudioChannelCount(path string) int {
 		}
 		return int(channels)
 	case ".ogg":
-		return 0
+		fmt.Fprintf(os.Stderr, "failed to parse %q, assuming stereo\n", path)
+		return 2
 	default:
 		fmt.Fprintf(os.Stderr, "unknown file format %q, assuming stereo\n", path)
 		return 2
