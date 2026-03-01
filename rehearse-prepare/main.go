@@ -27,6 +27,7 @@ type flags struct {
 	pan       float64
 
 	metronomeGain float64
+	globalGain    float64
 
 	onlyRehearsal  bool
 	onlyIndividual bool
@@ -45,6 +46,7 @@ func main() {
 	flag.Float64Var(&flags.gain, "gain", 1, "gain adjustment for background tracks")
 	flag.Float64Var(&flags.pan, "pan", 1, "pan for rehearsal track")
 	flag.Float64Var(&flags.metronomeGain, "metronome", 0.6, "metronome gain")
+	flag.Float64Var(&flags.globalGain, "global", 1, "global gain for full output")
 
 	flag.BoolVar(&flags.onlyRehearsal, "only-rehearsal", false, "only output rehearsal")
 	flag.BoolVar(&flags.onlyIndividual, "only-individual", false, "only output individual")
@@ -253,6 +255,9 @@ func rehearsalTrack(outdir string, tracks Tracks, flags flags, track Track) erro
 
 	amerge += "|c0=" + strings.Join(left, "+") + "|c1=" + strings.Join(right, "+")
 	amerge += ",loudnorm"
+	if flags.globalGain != 1 {
+		amerge += fmt.Sprintf(",volume=%.2f", flags.globalGain)
+	}
 	args = append(args, "-filter_complex", amerge)
 
 	dest := filepath.Join(outdir, strings.TrimSpace(filepath.Base(track.Path)))
@@ -336,6 +341,9 @@ func individualTrack(outdir string, tracks Tracks, flags flags, track Track) err
 
 	amerge += "|c0=" + strings.Join(mix, "+") + "|c1=" + strings.Join(mix, "+")
 	amerge += ",loudnorm"
+	if flags.globalGain != 1 {
+		amerge += fmt.Sprintf(",volume=%.2f", flags.globalGain)
+	}
 	args = append(args, "-filter_complex", amerge)
 
 	dest := filepath.Join(outdir, strings.TrimSpace(filepath.Base(track.Path)))
