@@ -16,3 +16,4 @@
 testdata/.*
 merge/
 dist/
+rehearse-prepare/rehearse-prepare
