@@ -86,6 +86,7 @@ var audioExt = map[string]bool{
 }
 
 var rxMetronome = regexp.MustCompile(`(?i)metronoo?me`)
+var rxMixdown = regexp.MustCompile(`(?i)mixdown`)
 
 func run(flags flags) error {
 	files, err := os.ReadDir(flags.inputDir)
@@ -118,6 +119,14 @@ func run(flags flags) error {
 				Path:     infile,
 				Channels: readAudioChannelCount(infile),
 			}
+			continue
+		}
+
+		if rxMixdown.MatchString(file.Name()) {
+			tracks.Mixdowns = append(tracks.Mixdowns, Track{
+				Path:     infile,
+				Channels: readAudioChannelCount(infile),
+			})
 			continue
 		}
 
@@ -155,6 +164,16 @@ func run(flags flags) error {
 		combinedTrack(group, flags.outputDir, tracks, flags)
 	}
 
+	for _, mixdown := range tracks.Mixdowns {
+		group.Go(func() error {
+			err := convertToMp3(flags.outputDir, mixdown)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Mixdown %q failed: %v\n", mixdown.Path, err)
+			}
+			return nil
+		})
+	}
+
 	group.Wait()
 
 	return nil
@@ -162,6 +181,7 @@ func run(flags flags) error {
 
 type Tracks struct {
 	Metronome Track
+	Mixdowns  []Track
 	Parts     []Track
 }
 
@@ -370,6 +390,31 @@ func individualTrack(outdir string, tracks Tracks, flags flags, track Track) err
 func combinedTrack(group *errgroup.Group, outdir string, tracks Tracks, flags flags) error {
 	_ = os.MkdirAll(outdir, 0755)
 	// TODO:
+	return nil
+}
+
+func convertToMp3(outdir string, track Track) error {
+	_ = os.MkdirAll(outdir, 0755)
+
+	dest := filepath.Join(outdir, strings.TrimSpace(filepath.Base(track.Path)))
+	dest = removeExt(dest) + ".mp3"
+
+	args := []string{"-y", "-i", track.Path, dest}
+
+	var buffer bytes.Buffer
+	fmt.Fprint(&buffer, "$ ffmpeg")
+	for _, arg := range args {
+		fmt.Fprintf(&buffer, " %q", arg)
+	}
+	fmt.Fprintln(&buffer)
+
+	cmd := exec.Command("ffmpeg", args...)
+	cmd.Stderr = &buffer
+	cmd.Stdout = &buffer
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("failed %q: %w", strings.Join(cmd.Args, " "), err)
+	}
+	fmt.Println(buffer.String())
 	return nil
 }
 
