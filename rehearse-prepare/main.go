@@ -88,6 +88,18 @@ var audioExt = map[string]bool{
 var rxMetronome = regexp.MustCompile(`(?i)metronoo?me`)
 var rxMixdown = regexp.MustCompile(`(?i)mixdown`)
 
+// divisi parts are named e.g. "Soprano 1 (Voice 1)", "Soprano 1 (Voice_2)"
+var rxVoice = regexp.MustCompile(`(?i)[ _]*\([ _]*voice[ _]*\d+[ _]*\)`)
+
+func trackFromPath(path string) Track {
+	name := removeExt(strings.TrimSpace(filepath.Base(path)))
+	return Track{
+		Name:     strings.TrimSpace(rxVoice.ReplaceAllString(name, "")),
+		Paths:    []string{path},
+		Channels: readAudioChannelCount(path),
+	}
+}
+
 func run(flags flags) error {
 	files, err := os.ReadDir(flags.inputDir)
 	if err != nil {
@@ -112,28 +124,25 @@ func run(flags flags) error {
 		}
 
 		if rxMetronome.MatchString(file.Name()) {
-			if tracks.Metronome.Path != "" {
+			if len(tracks.Metronome.Paths) > 0 {
 				return fmt.Errorf("multiple metronome tracks, found %v and %v", tracks.Metronome, infile)
 			}
-			tracks.Metronome = Track{
-				Path:     infile,
-				Channels: readAudioChannelCount(infile),
-			}
+			tracks.Metronome = trackFromPath(infile)
 			continue
 		}
 
 		if rxMixdown.MatchString(file.Name()) {
-			tracks.Mixdowns = append(tracks.Mixdowns, Track{
-				Path:     infile,
-				Channels: readAudioChannelCount(infile),
-			})
+			tracks.Mixdowns = append(tracks.Mixdowns, trackFromPath(infile))
 			continue
 		}
 
-		tracks.Parts = append(tracks.Parts, Track{
-			Path:     infile,
-			Channels: readAudioChannelCount(infile),
-		})
+		part := trackFromPath(infile)
+		if prev := tracks.Part(part.Name); prev != nil {
+			prev.Paths = append(prev.Paths, infile)
+			prev.Channels += part.Channels
+			continue
+		}
+		tracks.Parts = append(tracks.Parts, part)
 	}
 
 	group := new(errgroup.Group)
@@ -141,7 +150,7 @@ func run(flags flags) error {
 		group.SetLimit(flags.parallel)
 	}
 
-	if tracks.Metronome.Path != "" {
+	if len(tracks.Metronome.Paths) > 0 {
 		if flags.onlyRehearsal {
 			rehearsalTracks(group, filepath.Join(flags.outputDir, "Rehearse + metronome"), tracks, flags)
 		}
@@ -168,7 +177,7 @@ func run(flags flags) error {
 		group.Go(func() error {
 			err := convertToMp3(flags.outputDir, mixdown)
 			if err != nil {
-				fmt.Fprintf(os.Stderr, "Mixdown %q failed: %v\n", mixdown.Path, err)
+				fmt.Fprintf(os.Stderr, "Mixdown %q failed: %v\n", mixdown.Name, err)
 			}
 			return nil
 		})
@@ -185,9 +194,30 @@ type Tracks struct {
 	Parts     []Track
 }
 
+// Track is a single output part; it may be backed by several input files,
+// when the part is split into divisi voices.
 type Track struct {
-	Path     string
-	Channels int
+	Name     string
+	Paths    []string
+	Channels int // total across Paths
+}
+
+// appendInputs adds "-i path" for each backing file and returns the new input count.
+func (track Track) appendInputs(args []string, inputCount int) ([]string, int) {
+	for _, path := range track.Paths {
+		args = append(args, "-i", path)
+		inputCount++
+	}
+	return args, inputCount
+}
+
+func (tracks *Tracks) Part(name string) *Track {
+	for i := range tracks.Parts {
+		if tracks.Parts[i].Name == name {
+			return &tracks.Parts[i]
+		}
+	}
+	return nil
 }
 
 func rehearsalTracks(group *errgroup.Group, outdir string, tracks Tracks, flags flags) error {
@@ -196,7 +226,7 @@ func rehearsalTracks(group *errgroup.Group, outdir string, tracks Tracks, flags 
 	rxOnly := regexp.MustCompile("(?i)" + flags.selectTracks)
 
 	for _, track := range tracks.Parts {
-		if flags.selectTracks != "" && !rxOnly.MatchString(track.Path) {
+		if flags.selectTracks != "" && !rxOnly.MatchString(track.Name) {
 			continue
 		}
 
@@ -217,13 +247,9 @@ func rehearsalTrack(outdir string, tracks Tracks, flags flags, track Track) erro
 
 	inputCount := 0
 	for _, track := range tracks.Parts {
-		args = append(args, "-i", track.Path)
-		inputCount++
+		args, inputCount = track.appendInputs(args, inputCount)
 	}
-	if tracks.Metronome.Path != "" {
-		args = append(args, "-i", tracks.Metronome.Path)
-		inputCount++
-	}
+	args, inputCount = tracks.Metronome.appendInputs(args, inputCount)
 
 	// add inputs to -filter_complex
 	amerge := ""
@@ -239,7 +265,7 @@ func rehearsalTrack(outdir string, tracks Tracks, flags flags, track Track) erro
 	for _, target := range tracks.Parts {
 		pan := 1 - flags.pan
 		gain := flags.gain / math.Log2(float64(len(tracks.Parts)))
-		if target == track {
+		if target.Name == track.Name {
 			pan = 1 - pan
 			gain = 1
 		}
@@ -260,7 +286,7 @@ func rehearsalTrack(outdir string, tracks Tracks, flags flags, track Track) erro
 		mergedChannelIndex += target.Channels
 	}
 
-	if tracks.Metronome.Path != "" {
+	if len(tracks.Metronome.Paths) > 0 {
 		metronome := []string{}
 		gain := flags.metronomeGain / float64(tracks.Metronome.Channels)
 		for i := range tracks.Metronome.Channels {
@@ -280,8 +306,7 @@ func rehearsalTrack(outdir string, tracks Tracks, flags flags, track Track) erro
 	}
 	args = append(args, "-filter_complex", amerge)
 
-	dest := filepath.Join(outdir, strings.TrimSpace(filepath.Base(track.Path)))
-	dest = removeExt(dest) + ".mp3"
+	dest := filepath.Join(outdir, track.Name+".mp3")
 	args = append(args, dest)
 
 	var buffer bytes.Buffer
@@ -309,7 +334,7 @@ func individualTracks(group *errgroup.Group, outdir string, tracks Tracks, flags
 	rxOnly := regexp.MustCompile("(?i)" + flags.selectTracks)
 
 	for _, track := range tracks.Parts {
-		if flags.selectTracks != "" && !rxOnly.MatchString(track.Path) {
+		if flags.selectTracks != "" && !rxOnly.MatchString(track.Name) {
 			continue
 		}
 
@@ -328,12 +353,9 @@ func individualTracks(group *errgroup.Group, outdir string, tracks Tracks, flags
 func individualTrack(outdir string, tracks Tracks, flags flags, track Track) error {
 	args := []string{"-y"}
 
-	inputCount := 1
-	args = append(args, "-i", track.Path)
-	if tracks.Metronome.Path != "" {
-		inputCount++
-		args = append(args, "-i", tracks.Metronome.Path)
-	}
+	inputCount := 0
+	args, inputCount = track.appendInputs(args, inputCount)
+	args, inputCount = tracks.Metronome.appendInputs(args, inputCount)
 
 	amerge := ""
 	for i := range inputCount {
@@ -351,7 +373,7 @@ func individualTrack(outdir string, tracks Tracks, flags flags, track Track) err
 		mergedChannelIndex += track.Channels
 	}
 
-	if tracks.Metronome.Path != "" {
+	if len(tracks.Metronome.Paths) > 0 {
 		gain := flags.metronomeGain / float64(tracks.Metronome.Channels)
 		for i := range tracks.Metronome.Channels {
 			mix = append(mix, fmt.Sprintf("%.2f*c%d", gain, mergedChannelIndex+i))
@@ -366,8 +388,7 @@ func individualTrack(outdir string, tracks Tracks, flags flags, track Track) err
 	}
 	args = append(args, "-filter_complex", amerge)
 
-	dest := filepath.Join(outdir, strings.TrimSpace(filepath.Base(track.Path)))
-	dest = removeExt(dest) + ".mp3"
+	dest := filepath.Join(outdir, track.Name+".mp3")
 	args = append(args, dest)
 
 	var buffer bytes.Buffer
@@ -396,10 +417,10 @@ func combinedTrack(group *errgroup.Group, outdir string, tracks Tracks, flags fl
 func convertToMp3(outdir string, track Track) error {
 	_ = os.MkdirAll(outdir, 0755)
 
-	dest := filepath.Join(outdir, strings.TrimSpace(filepath.Base(track.Path)))
-	dest = removeExt(dest) + ".mp3"
+	dest := filepath.Join(outdir, track.Name+".mp3")
 
-	args := []string{"-y", "-i", track.Path, dest}
+	args, _ := track.appendInputs([]string{"-y"}, 0)
+	args = append(args, dest)
 
 	var buffer bytes.Buffer
 	fmt.Fprint(&buffer, "$ ffmpeg")
