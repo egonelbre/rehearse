@@ -243,25 +243,7 @@ func rehearsalTracks(group *errgroup.Group, outdir string, tracks Tracks, flags 
 }
 
 func rehearsalTrack(outdir string, tracks Tracks, flags flags, track Track) error {
-	args := []string{"-y"}
-
-	inputCount := 0
-	for _, track := range tracks.Parts {
-		args, inputCount = track.appendInputs(args, inputCount)
-	}
-	args, inputCount = tracks.Metronome.appendInputs(args, inputCount)
-
-	// add inputs to -filter_complex
-	amerge := ""
-	for i := range inputCount {
-		amerge += fmt.Sprintf("[%d:a]", i)
-	}
-	amerge += fmt.Sprintf(" amerge=inputs=%d,pan=stereo", inputCount)
-
-	left := []string{}
-	right := []string{}
-
-	mergedChannelIndex := 0
+	var inputs []mixInput
 	for _, target := range tracks.Parts {
 		pan := 1 - flags.pan
 		gain := flags.gain / math.Log2(float64(len(tracks.Parts)))
@@ -269,45 +251,42 @@ func rehearsalTrack(outdir string, tracks Tracks, flags flags, track Track) erro
 			pan = 1 - pan
 			gain = 1
 		}
-
-		gain /= float64(target.Channels)
-
-		if pan < 1 {
-			for i := range target.Channels {
-				left = append(left, fmt.Sprintf("%.2f*c%d", gain*(1-pan), mergedChannelIndex+i))
-			}
-		}
-		if pan > 0 {
-			for i := range target.Channels {
-				right = append(right, fmt.Sprintf("%.2f*c%d", gain*pan, mergedChannelIndex+i))
-			}
-		}
-
-		mergedChannelIndex += target.Channels
+		inputs = append(inputs, mixInput{target, gain * (1 - pan), gain * pan})
 	}
-
 	if len(tracks.Metronome.Paths) > 0 {
-		metronome := []string{}
-		gain := flags.metronomeGain / float64(tracks.Metronome.Channels)
-		for i := range tracks.Metronome.Channels {
-			metronome = append(metronome, fmt.Sprintf("%.2f*c%d", gain, mergedChannelIndex+i))
+		inputs = append(inputs, mixInput{tracks.Metronome, flags.metronomeGain, flags.metronomeGain})
+	}
+	return mix(filepath.Join(outdir, track.Name+".mp3"), inputs, flags)
+}
+
+type mixInput struct {
+	Track       Track
+	Left, Right float64
+}
+
+// mix normalizes each input on its own, pans it to stereo and sums them.
+// Normalizing per input (rather than the final mix) keeps one track's gain
+// from changing the loudness of the others.
+func mix(dest string, inputs []mixInput, flags flags) error {
+	args := []string{"-y"}
+	filter := ""
+	inputCount := 0
+	for _, in := range inputs {
+		for _, path := range in.Track.Paths {
+			args = append(args, "-i", path)
+			filter += fmt.Sprintf("[%d:a]loudnorm,pan=stereo|c0=%s|c1=%s[s%d];",
+				inputCount, panExpr(in.Left, in.Track.Channels), panExpr(in.Right, in.Track.Channels), inputCount)
+			inputCount++
 		}
-
-		left = append(left, metronome...)
-		right = append(right, metronome...)
-
-		mergedChannelIndex += tracks.Metronome.Channels
 	}
-
-	amerge += "|c0=" + strings.Join(left, "+") + "|c1=" + strings.Join(right, "+")
-	amerge += ",loudnorm"
+	for i := range inputCount {
+		filter += fmt.Sprintf("[s%d]", i)
+	}
+	filter += fmt.Sprintf("amix=inputs=%d:normalize=0:duration=shortest,aresample=48000", inputCount)
 	if flags.globalGain != 1 {
-		amerge += fmt.Sprintf(",volume=%.2f", flags.globalGain)
+		filter += fmt.Sprintf(",volume=%.2f", flags.globalGain)
 	}
-	args = append(args, "-filter_complex", amerge)
-
-	dest := filepath.Join(outdir, track.Name+".mp3")
-	args = append(args, dest)
+	args = append(args, "-filter_complex", filter, dest)
 
 	var buffer bytes.Buffer
 	fmt.Fprint(&buffer, "$ ffmpeg")
@@ -322,10 +301,17 @@ func rehearsalTrack(outdir string, tracks Tracks, flags flags, track Track) erro
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("failed %q: %w", strings.Join(cmd.Args, " "), err)
 	}
-
 	fmt.Println(buffer.String())
-
 	return nil
+}
+
+// panExpr averages all channels of an input into one with the given gain.
+func panExpr(gain float64, channels int) string {
+	terms := []string{}
+	for i := range channels {
+		terms = append(terms, fmt.Sprintf("%.3f*c%d", gain/float64(channels), i))
+	}
+	return strings.Join(terms, "+")
 }
 
 func individualTracks(group *errgroup.Group, outdir string, tracks Tracks, flags flags) error {
@@ -351,61 +337,11 @@ func individualTracks(group *errgroup.Group, outdir string, tracks Tracks, flags
 }
 
 func individualTrack(outdir string, tracks Tracks, flags flags, track Track) error {
-	args := []string{"-y"}
-
-	inputCount := 0
-	args, inputCount = track.appendInputs(args, inputCount)
-	args, inputCount = tracks.Metronome.appendInputs(args, inputCount)
-
-	amerge := ""
-	for i := range inputCount {
-		amerge += fmt.Sprintf("[%d:a]", i)
-	}
-	amerge += fmt.Sprintf(" amerge=inputs=%d,pan=stereo", inputCount)
-
-	mix := []string{}
-	mergedChannelIndex := 0
-
-	{
-		for i := range track.Channels {
-			mix = append(mix, fmt.Sprintf("c%d", mergedChannelIndex+i))
-		}
-		mergedChannelIndex += track.Channels
-	}
-
+	inputs := []mixInput{{track, 1, 1}}
 	if len(tracks.Metronome.Paths) > 0 {
-		gain := flags.metronomeGain / float64(tracks.Metronome.Channels)
-		for i := range tracks.Metronome.Channels {
-			mix = append(mix, fmt.Sprintf("%.2f*c%d", gain, mergedChannelIndex+i))
-		}
-		mergedChannelIndex += tracks.Metronome.Channels
+		inputs = append(inputs, mixInput{tracks.Metronome, flags.metronomeGain, flags.metronomeGain})
 	}
-
-	amerge += "|c0=" + strings.Join(mix, "+") + "|c1=" + strings.Join(mix, "+")
-	amerge += ",loudnorm"
-	if flags.globalGain != 1 {
-		amerge += fmt.Sprintf(",volume=%.2f", flags.globalGain)
-	}
-	args = append(args, "-filter_complex", amerge)
-
-	dest := filepath.Join(outdir, track.Name+".mp3")
-	args = append(args, dest)
-
-	var buffer bytes.Buffer
-	fmt.Fprint(&buffer, "$ ffmpeg")
-	for _, arg := range args {
-		fmt.Fprintf(&buffer, " %q", arg)
-	}
-	fmt.Fprintln(&buffer)
-
-	cmd := exec.Command("ffmpeg", args...)
-	cmd.Stderr = &buffer
-	cmd.Stdout = &buffer
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("failed %q: %w", strings.Join(cmd.Args, " "), err)
-	}
-	fmt.Println(buffer.String())
-	return nil
+	return mix(filepath.Join(outdir, track.Name+".mp3"), inputs, flags)
 }
 
 func combinedTrack(group *errgroup.Group, outdir string, tracks Tracks, flags flags) error {
